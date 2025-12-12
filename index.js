@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const app = express();
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const port = process.env.PORT || 3000;
 
@@ -29,6 +29,7 @@ async function run() {
     const db = client.db("AssetVerseDB");
     // Collections
     const usersCollection = db.collection("users");
+    const assetsCollection = db.collection("assets");
 
     app.get("/", (req, res) => {
       res.send("Asset Verse API");
@@ -91,6 +92,89 @@ async function run() {
     });
 
     // Keep writing new APIs here...
+
+    // Add Asset
+
+    app.post("/assets", async (req, res) => {
+      try {
+        console.log("Incoming asset data:", req.body);
+
+        const asset = req.body;
+
+        const newAsset = {
+          ...asset,
+          status: "available",
+          createdAt: new Date(),
+        };
+
+        const result = await assetsCollection.insertOne(newAsset);
+
+        res.send({
+          success: true,
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("ADD ASSET ERROR:", error);
+
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // Get all assets for a specific HR
+    app.get("/assets", async (req, res) => {
+      try {
+        const { hrEmail } = req.query;
+
+        if (!hrEmail) {
+          return res.status(400).send({
+            success: false,
+            message: "hrEmail query is required",
+          });
+        }
+
+        const assets = await assetsCollection
+          .find({ hrEmail })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send({
+          success: true,
+          assets,
+        });
+      } catch (error) {
+        console.error("GET ASSETS ERROR:", error);
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    
+
+    // Delete asset
+    app.delete("/assets/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const result = await assetsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({
+          success: result.deletedCount > 0,
+        });
+      } catch (error) {
+        console.error("DELETE ASSET ERROR:", error);
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
