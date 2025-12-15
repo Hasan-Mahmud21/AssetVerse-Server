@@ -3,6 +3,7 @@ const cors = require("cors");
 const app = express();
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+//  const { ObjectId } = require("mongodb");
 
 const port = process.env.PORT || 3000;
 
@@ -30,6 +31,7 @@ async function run() {
     // Collections
     const usersCollection = db.collection("users");
     const assetsCollection = db.collection("assets");
+    const assetRequestsCollection = db.collection("assetRequests");
 
     app.get("/", (req, res) => {
       res.send("Asset Verse API");
@@ -153,8 +155,6 @@ async function run() {
       }
     });
 
-    
-
     // Delete asset
     app.delete("/assets/:id", async (req, res) => {
       try {
@@ -173,6 +173,139 @@ async function run() {
           success: false,
           message: error.message,
         });
+      }
+    });
+
+    // Get available assets (for employees)
+    app.get("/assets/available", async (req, res) => {
+      try {
+        const assets = await assetsCollection
+          .find({ quantity: { $gt: 0 } })
+          .toArray();
+
+        res.send(assets);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Request asset
+    app.post("/asset-requests", async (req, res) => {
+      try {
+        const { assetId, assetName, employeeEmail, hrEmail } = req.body;
+
+        // 🔒 1. Check if already requested (pending)
+        const existingRequest = await assetRequestsCollection.findOne({
+          assetId: new ObjectId(assetId),
+          employeeEmail,
+          status: "pending",
+        });
+
+        if (existingRequest) {
+          return res.status(400).send({
+            success: false,
+            message: "You already requested this asset",
+          });
+        }
+
+        // 2. Create new request
+        const newRequest = {
+          assetId: new ObjectId(assetId),
+          assetName,
+          employeeEmail,
+          hrEmail,
+          requestDate: new Date(),
+          status: "pending",
+        };
+
+        const result = await assetRequestsCollection.insertOne(newRequest);
+
+        res.send({
+          success: true,
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // Get all asset requests for HR
+    app.get("/asset-requests/hr/:email", async (req, res) => {
+      try {
+        const hrEmail = req.params.email;
+
+        const requests = await assetRequestsCollection
+          .find({ hrEmail })
+          .sort({ requestDate: -1 })
+          .toArray();
+
+        res.send(requests);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Approve request
+    app.patch("/asset-requests/approve/:id", async (req, res) => {
+      try {
+        const requestId = req.params.id;
+
+        const request = await assetRequestsCollection.findOne({
+          _id: new ObjectId(requestId),
+        });
+
+        if (!request || request.status !== "pending") {
+          return res.status(400).send({ message: "Invalid request" });
+        }
+
+        // 1️⃣ Deduct asset quantity
+        await assetsCollection.updateOne(
+          { _id: request.assetId, quantity: { $gt: 0 } },
+          { $inc: { quantity: -1 } }
+        );
+
+        // 2️⃣ Update request status
+        await assetRequestsCollection.updateOne(
+          { _id: new ObjectId(requestId) },
+          { $set: { status: "approved" } }
+        );
+
+        // 3️⃣ Assign asset to employee
+        await usersCollection.updateOne(
+          { email: request.employeeEmail },
+          {
+            $addToSet: {
+              assignedAssets: {
+                assetId: request.assetId,
+                assetName: request.assetName,
+                assignedDate: new Date(),
+              },
+            },
+          }
+        );
+
+        res.send({ success: true });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Reject Request
+    app.patch("/asset-requests/reject/:id", async (req, res) => {
+      try {
+        const requestId = req.params.id;
+
+        await assetRequestsCollection.updateOne(
+          { _id: new ObjectId(requestId) },
+          { $set: { status: "rejected" } }
+        );
+
+        res.send({ success: true });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
       }
     });
 
