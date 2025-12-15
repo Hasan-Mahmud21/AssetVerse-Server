@@ -80,7 +80,14 @@ async function run() {
         return res.send({ message: "Email already exists" });
       }
 
-      const result = await usersCollection.insertOne(user);
+      const employeeUser = {
+        ...user,
+        role: "employee",
+        assignedAssets: [],
+        createdAt: new Date(),
+      };
+
+      const result = await usersCollection.insertOne(employeeUser);
       res.send(result);
     });
 
@@ -176,6 +183,26 @@ async function run() {
       }
     });
 
+    // Get employee assigned assets
+    app.get("/employees/:email/assets", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const employee = await usersCollection.findOne(
+          { email },
+          { projection: { assignedAssets: 1 } }
+        );
+
+        if (!employee) {
+          return res.status(404).send({ message: "Employee not found" });
+        }
+
+        res.send(employee.assignedAssets || []);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
     // Get available assets (for employees)
     app.get("/assets/available", async (req, res) => {
       try {
@@ -192,7 +219,7 @@ async function run() {
     // Request asset
     app.post("/asset-requests", async (req, res) => {
       try {
-        const { assetId, assetName, employeeEmail, hrEmail } = req.body;
+        const { assetId, assetName, employeeEmail, hrEmail, note } = req.body;
 
         // 🔒 1. Check if already requested (pending)
         const existingRequest = await assetRequestsCollection.findOne({
@@ -214,6 +241,7 @@ async function run() {
           assetName,
           employeeEmail,
           hrEmail,
+          note, // 🔥 ADD THIS
           requestDate: new Date(),
           status: "pending",
         };
@@ -304,6 +332,66 @@ async function run() {
         );
 
         res.send({ success: true });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Get employee assigned assets
+    app.get("/employees/:email/assets", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const employee = await usersCollection.findOne(
+          { email },
+          { projection: { assignedAssets: 1 } }
+        );
+
+        if (!employee) {
+          return res.status(404).send({ message: "Employee not found" });
+        }
+
+        res.send(employee.assignedAssets || []);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Get employees under an HR
+    app.get("/hr/:email/employees", async (req, res) => {
+      try {
+        const hrEmail = req.params.email;
+
+        const employees = await usersCollection
+          .find({ role: "employee", hrEmail })
+          .project({
+            name: 1,
+            email: 1,
+            assignedAssets: 1,
+            createdAt: 1,
+          })
+          .toArray();
+
+        res.send(employees);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // Remove employee from HR team
+    app.patch("/hr/remove-employee", async (req, res) => {
+      try {
+        const { employeeEmail } = req.body;
+
+        const result = await usersCollection.updateOne(
+          { email: employeeEmail },
+          {
+            $unset: { hrEmail: "" },
+            $set: { assignedAssets: [] },
+          }
+        );
+
+        res.send({ success: result.modifiedCount > 0 });
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
