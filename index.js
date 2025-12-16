@@ -32,6 +32,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const assetsCollection = db.collection("assets");
     const assetRequestsCollection = db.collection("assetRequests");
+    const packagesCollection = db.collection("packages");
 
     app.get("/", (req, res) => {
       res.send("Asset Verse API");
@@ -396,6 +397,53 @@ async function run() {
         res.status(500).send({ message: error.message });
       }
     });
+
+    // fetch packages
+
+    app.get("/packages", async (req, res) => {
+      const packages = await packagesCollection.find().toArray();
+      res.send(packages);
+    });
+
+    // stipe payment checkout
+
+    app.post("/create-checkout-session", async (req, res) => {
+      try {
+        const { email, plan } = req.body;
+
+        const pkg = await packagesCollection.findOne({ name: plan });
+
+        if (!pkg) {
+          return res.status(404).send({ message: "Package not found" });
+        }
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          mode: "payment",
+          customer_email: email,
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: `${pkg.name.toUpperCase()} Package`,
+                },
+                unit_amount: pkg.price,
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: `${process.env.CLIENT_URL}/hr/payment-success?plan=${pkg.name}`,
+          cancel_url: `${process.env.CLIENT_URL}/hr/upgrade`,
+        });
+
+        res.send({ url: session.url });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
