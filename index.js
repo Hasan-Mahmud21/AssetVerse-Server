@@ -11,6 +11,22 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
+
+// verifyToken
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).send({ message: "Unauthorized" });
+
+  try {
+    const token = authHeader.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.email = decoded.email;
+    next();
+  } catch (error) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+};
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.478fouv.mongodb.net/?appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -442,8 +458,6 @@ async function run() {
         res.status(500).send({ message: error.message });
       }
     });
-
-    
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
