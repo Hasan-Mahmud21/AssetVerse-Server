@@ -11,7 +11,6 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
-
 // verifyToken
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -50,14 +49,35 @@ async function run() {
     const assetRequestsCollection = db.collection("assetRequests");
     const packagesCollection = db.collection("packages");
 
+    const verifyHR = async (req, res, next) => {
+      const user = await usersCollection.findOne({ email: req.email });
+      if (!user || user.role !== "hr") {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+      next();
+    };
+
+    const verifyEmployee = async (req, res, next) => {
+      const user = await usersCollection.findOne({ email: req.email });
+      if (!user || user.role !== "employee") {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+      next();
+    };
+
     app.get("/", (req, res) => {
       res.send("Asset Verse API");
     });
 
-    app.post("/users", async (req, res) => {
-      const user = req.body;
-      const result = await usersCollection.insertOne(user);
-      res.send(result);
+    app.get("/users", async (req, res) => {
+      const { email } = req.query;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email required" });
+      }
+
+      const user = await usersCollection.findOne({ email });
+      res.send(user);
     });
 
     // HR REGISTER API
@@ -113,7 +133,22 @@ async function run() {
     // ----------------------
     app.get("/users/:email", async (req, res) => {
       const user = await usersCollection.findOne({ email: req.params.email });
-      if (!user) return res.send({ success: false });
+      res.send(user);
+    });
+
+    app.get("/users", async (req, res) => {
+      const { email } = req.query;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email query required" });
+      }
+
+      const user = await usersCollection.findOne({ email });
+
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+
       res.send(user);
     });
 
@@ -123,29 +158,53 @@ async function run() {
 
     app.post("/assets", async (req, res) => {
       try {
-        console.log("Incoming asset data:", req.body);
-
         const asset = req.body;
 
+        // ✅ normalize keys (so frontend can send productName OR name etc.)
+        const name =
+          asset.name || asset.productName || asset.assetName || asset.title;
+
+        const type = asset.type || asset.productType || asset.assetType;
+
+        const image = asset.image || asset.productImage || asset.assetImage;
+
+        const quantity = Number(asset.quantity ?? asset.productQuantity ?? 0);
+
+        const hrEmail = asset.hrEmail;
+
+        if (
+          !name ||
+          !type ||
+          !image ||
+          !hrEmail ||
+          !Number.isFinite(quantity)
+        ) {
+          return res.status(400).send({
+            success: false,
+            message:
+              "Missing required asset fields (name/type/image/hrEmail/quantity)",
+          });
+        }
+
+        // ✅ Pull companyName from HR user (more reliable)
+        const hrUser = await usersCollection.findOne({ email: hrEmail });
+
         const newAsset = {
-          ...asset,
+          assetName: name,
+          assetType: type,
+          image,
+          quantity,
+          hrEmail,
+          companyName: hrUser?.companyName || "Unknown",
           status: "available",
           createdAt: new Date(),
         };
 
         const result = await assetsCollection.insertOne(newAsset);
 
-        res.send({
-          success: true,
-          insertedId: result.insertedId,
-        });
+        res.send({ success: true, insertedId: result.insertedId });
       } catch (error) {
-        console.error("ADD ASSET ERROR:", error);
-
-        res.status(500).send({
-          success: false,
-          message: error.message,
-        });
+        res.status(500).send({ success: false, message: error.message });
       }
     });
 
@@ -225,6 +284,14 @@ async function run() {
       try {
         const assets = await assetsCollection
           .find({ quantity: { $gt: 0 } })
+          .project({
+            assetName: 1,
+            assetType: 1,
+            image: 1,
+            quantity: 1,
+            hrEmail: 1,
+          })
+
           .toArray();
 
         res.send(assets);
@@ -234,11 +301,67 @@ async function run() {
     });
 
     // Request asset
+    // app.post("/asset-requests", async (req, res) => {
+    //   try {
+    //     const { assetId, assetName, employeeEmail, hrEmail, note } = req.body;
+
+    //     // 🔒 1. Check if already requested (pending)
+    //     const existingRequest = await assetRequestsCollection.findOne({
+    //       assetId: new ObjectId(assetId),
+    //       employeeEmail,
+    //       status: "pending",
+    //     });
+
+    //     if (existingRequest) {
+    //       return res.status(400).send({
+    //         success: false,
+    //         message: "You already requested this asset",
+    //       });
+    //     }
+
+    //     // 2. Create new request
+    //     const newRequest = {
+    //       assetId: new ObjectId(assetId),
+    //       assetName,
+    //       employeeEmail,
+    //       hrEmail,
+    //       note, // 🔥 ADD THIS
+    //       requestDate: new Date(),
+    //       status: "pending",
+    //     };
+
+    //     const result = await assetRequestsCollection.insertOne(newRequest);
+
+    //     res.send({
+    //       success: true,
+    //       insertedId: result.insertedId,
+    //     });
+    //   } catch (error) {
+    //     res.status(500).send({
+    //       success: false,
+    //       message: error.message,
+    //     });
+    //   }
+    // });
     app.post("/asset-requests", async (req, res) => {
       try {
-        const { assetId, assetName, employeeEmail, hrEmail, note } = req.body;
+        const { assetId, employeeEmail, note } = req.body;
 
-        // 🔒 1. Check if already requested (pending)
+        // 1️⃣ Fetch asset
+        const asset = await assetsCollection.findOne({
+          _id: new ObjectId(assetId),
+        });
+
+        if (!asset) {
+          return res.status(404).send({ message: "Asset not found" });
+        }
+
+        // 2️⃣ Fetch HR (for companyName)
+        const hrUser = await usersCollection.findOne({
+          email: asset.hrEmail,
+        });
+
+        // 3️⃣ Prevent duplicate request
         const existingRequest = await assetRequestsCollection.findOne({
           assetId: new ObjectId(assetId),
           employeeEmail,
@@ -252,28 +375,24 @@ async function run() {
           });
         }
 
-        // 2. Create new request
+        // 4️⃣ Create request with FULL DATA
         const newRequest = {
           assetId: new ObjectId(assetId),
-          assetName,
+          assetName: asset.assetName, // now guaranteed
+          assetType: asset.assetType,
+          companyName: hrUser?.companyName || "Unknown",
           employeeEmail,
-          hrEmail,
-          note, // 🔥 ADD THIS
+          hrEmail: asset.hrEmail,
+          note,
           requestDate: new Date(),
           status: "pending",
         };
 
-        const result = await assetRequestsCollection.insertOne(newRequest);
+        await assetRequestsCollection.insertOne(newRequest);
 
-        res.send({
-          success: true,
-          insertedId: result.insertedId,
-        });
+        res.send({ success: true });
       } catch (error) {
-        res.status(500).send({
-          success: false,
-          message: error.message,
-        });
+        res.status(500).send({ message: error.message });
       }
     });
 
@@ -306,31 +425,49 @@ async function run() {
           return res.status(400).send({ message: "Invalid request" });
         }
 
-        // 1️⃣ Deduct asset quantity
-        await assetsCollection.updateOne(
+        const assetUpdate = await assetsCollection.updateOne(
           { _id: request.assetId, quantity: { $gt: 0 } },
           { $inc: { quantity: -1 } }
         );
 
-        // 2️⃣ Update request status
+        if (!assetUpdate.modifiedCount) {
+          return res.status(400).send({ message: "Asset unavailable" });
+        }
+
         await assetRequestsCollection.updateOne(
           { _id: new ObjectId(requestId) },
-          { $set: { status: "approved" } }
+          { $set: { status: "approved", approvedDate: new Date() } }
         );
 
-        // 3️⃣ Assign asset to employee
+        const employee = await usersCollection.findOne({
+          email: request.employeeEmail,
+        });
+
+        const isFirstTime = !employee?.hrEmail;
+
         await usersCollection.updateOne(
           { email: request.employeeEmail },
           {
+            $set: { hrEmail: request.hrEmail },
             $addToSet: {
               assignedAssets: {
                 assetId: request.assetId,
                 assetName: request.assetName,
+                assetType: request.assetType,
+                companyName: request.companyName,
                 assignedDate: new Date(),
+                status: "approved",
               },
             },
           }
         );
+
+        if (isFirstTime) {
+          await usersCollection.updateOne(
+            { email: request.hrEmail },
+            { $inc: { currentEmployees: 1 } }
+          );
+        }
 
         res.send({ success: true });
       } catch (error) {
@@ -375,6 +512,7 @@ async function run() {
     });
 
     // Get employees under an HR
+    // Get employees under an HR
     app.get("/hr/:email/employees", async (req, res) => {
       try {
         const hrEmail = req.params.email;
@@ -384,12 +522,22 @@ async function run() {
           .project({
             name: 1,
             email: 1,
+            photoURL: 1,
             assignedAssets: 1,
             createdAt: 1,
           })
           .toArray();
 
-        res.send(employees);
+        const formatted = employees.map((emp) => ({
+          _id: emp._id,
+          name: emp.name,
+          email: emp.email,
+          photo: emp.photoURL || null,
+          joinDate: emp.createdAt,
+          assetsCount: emp.assignedAssets?.length || 0,
+        }));
+
+        res.send(formatted);
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
@@ -421,17 +569,76 @@ async function run() {
       res.send(packages);
     });
 
+    // Upgrade HR package after payment success
+    // app.patch("/users/upgrade-package", async (req, res) => {
+    //   try {
+    //     const { email, plan } = req.body;
+
+    //     const pkg = await packagesCollection.findOne({ name: plan });
+
+    //     if (!pkg) {
+    //       return res.status(404).send({ message: "Package not found" });
+    //     }
+
+    //     const result = await usersCollection.updateOne(
+    //       { email },
+    //       {
+    //         $set: {
+    //           subscription: pkg.name,
+    //           packageLimit: pkg.employeeLimit,
+    //           updatedAt: new Date(),
+    //         },
+    //       }
+    //     );
+
+    //     res.send({
+    //       success: true,
+    //       message: "Package upgraded successfully",
+    //       package: pkg.name,
+    //       employeeLimit: pkg.employeeLimit,
+    //     });
+    //   } catch (error) {
+    //     res.status(500).send({ message: error.message });
+    //   }
+    // });
+
+    app.patch("/users/upgrade-package", async (req, res) => {
+      try {
+        const { plan } = req.body;
+
+        const pkg = await packagesCollection.findOne({ name: plan });
+        if (!pkg) {
+          return res.status(404).send({ message: "Package not found" });
+        }
+
+        // TEMP: identify HR by email from frontend later (secure version later)
+        const email = req.body.email;
+
+        await usersCollection.updateOne(
+          { email },
+          {
+            $set: {
+              subscription: plan,
+              packageLimit: pkg.employeeLimit,
+            },
+          }
+        );
+
+        res.send({ success: true });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
     // stipe payment checkout
+    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
     app.post("/create-checkout-session", async (req, res) => {
       try {
         const { email, plan } = req.body;
 
         const pkg = await packagesCollection.findOne({ name: plan });
-
-        if (!pkg) {
-          return res.status(404).send({ message: "Package not found" });
-        }
+        if (!pkg) return res.status(404).send({ message: "Package not found" });
 
         const session = await stripe.checkout.sessions.create({
           payment_method_types: ["card"],
@@ -449,11 +656,45 @@ async function run() {
               quantity: 1,
             },
           ],
-          success_url: `${process.env.CLIENT_URL}/hr/payment-success?plan=${pkg.name}`,
+          success_url: `${process.env.CLIENT_URL}/payment-success?plan=${pkg.name}`,
+
           cancel_url: `${process.env.CLIENT_URL}/hr/upgrade`,
         });
 
         res.send({ url: session.url });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // PAYMENT SUCCESS - UPDATE HR PACKAGE
+    app.patch("/payment-success", async (req, res) => {
+      try {
+        const { email, plan } = req.body;
+
+        // 1. Find package
+        const pkg = await packagesCollection.findOne({ name: plan });
+        if (!pkg) {
+          return res.status(404).send({ message: "Package not found" });
+        }
+
+        // 2. Update HR user
+        const result = await usersCollection.updateOne(
+          { email },
+          {
+            $set: {
+              packageLimit: pkg.employeeLimit,
+              subscription: pkg.name,
+              updatedAt: new Date(),
+            },
+          }
+        );
+
+        res.send({
+          success: true,
+          message: "Package upgraded successfully",
+          result,
+        });
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
