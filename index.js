@@ -335,10 +335,38 @@ async function run() {
     });
 
     // Get available assets (for employees)
+    // app.get("/assets/available", async (req, res) => {
+    //   try {
+    //     const assets = await assetsCollection
+    //       .find({ quantity: { $gt: 0 } })
+    //       .project({
+    //         assetName: 1,
+    //         assetType: 1,
+    //         image: 1,
+    //         quantity: 1,
+    //         hrEmail: 1,
+    //       })
+
+    //       .toArray();
+
+    //     res.send(assets);
+    //   } catch (error) {
+    //     res.status(500).send({ message: error.message });
+    //   }
+    // });
+
     app.get("/assets/available", async (req, res) => {
       try {
+        const page = Number(req.query.page) || 1;
+        const limit = Number(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const query = { quantity: { $gt: 0 } };
+
+        const total = await assetsCollection.countDocuments(query);
+
         const assets = await assetsCollection
-          .find({ quantity: { $gt: 0 } })
+          .find(query)
           .project({
             assetName: 1,
             assetType: 1,
@@ -346,10 +374,16 @@ async function run() {
             quantity: 1,
             hrEmail: 1,
           })
-
+          .skip(skip)
+          .limit(limit)
           .toArray();
 
-        res.send(assets);
+        res.send({
+          data: assets,
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: page,
+        });
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
