@@ -40,7 +40,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("AssetVerseDB");
     // Collections
@@ -190,11 +190,13 @@ async function run() {
         const newAsset = {
           assetName: name,
           assetType: type,
+          returnable: Boolean(asset.returnable),
           image,
           quantity,
           hrEmail,
           companyName: hrUser?.companyName || "Unknown",
           status: "available",
+
           createdAt: new Date(),
         };
 
@@ -678,6 +680,28 @@ async function run() {
       }
     });
 
+    // analytics
+    app.get("/analytics/asset-return-type/:email", async (req, res) => {
+      const hrEmail = req.params.email;
+
+      const result = await assetsCollection
+        .aggregate([
+          { $match: { hrEmail } },
+          {
+            $group: {
+              _id: "$returnable",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
+
+      res.send({
+        returnable: result.find((r) => r._id === true)?.count || 0,
+        nonReturnable: result.find((r) => r._id === false)?.count || 0,
+      });
+    });
+
     // fetch packages
 
     app.get("/packages", async (req, res) => {
@@ -783,10 +807,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
