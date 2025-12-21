@@ -337,25 +337,6 @@ async function run() {
     });
 
     // Get available assets (for employees)
-    // app.get("/assets/available", async (req, res) => {
-    //   try {
-    //     const assets = await assetsCollection
-    //       .find({ quantity: { $gt: 0 } })
-    //       .project({
-    //         assetName: 1,
-    //         assetType: 1,
-    //         image: 1,
-    //         quantity: 1,
-    //         hrEmail: 1,
-    //       })
-
-    //       .toArray();
-
-    //     res.send(assets);
-    //   } catch (error) {
-    //     res.status(500).send({ message: error.message });
-    //   }
-    // });
 
     app.get("/assets/available", async (req, res) => {
       try {
@@ -680,26 +661,58 @@ async function run() {
       }
     });
 
-    // analytics
-    app.get("/analytics/asset-return-type/:email", async (req, res) => {
-      const hrEmail = req.params.email;
+    // analytics pie
+    app.get("/analytics/returnable-vs-non", async (req, res) => {
+      try {
+        const assets = await assetsCollection.find().toArray();
 
-      const result = await assetsCollection
-        .aggregate([
-          { $match: { hrEmail } },
-          {
-            $group: {
-              _id: "$returnable",
-              count: { $sum: 1 },
+        let returnable = 0;
+        let nonReturnable = 0;
+
+        assets.forEach((asset) => {
+          if (["Laptop", "Mobile"].includes(asset.assetType)) {
+            returnable += asset.quantity || 0;
+          } else {
+            nonReturnable += asset.quantity || 0;
+          }
+        });
+
+        res.send([
+          { name: "Returnable", value: returnable },
+          { name: "Non-returnable", value: nonReturnable },
+        ]);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    // analytics bar - top requested assets
+    app.get("/analytics/top-requested-assets", async (req, res) => {
+      try {
+        const data = await assetRequestsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$assetName",
+                requests: { $sum: 1 },
+              },
             },
-          },
-        ])
-        .toArray();
+            { $sort: { requests: -1 } },
+            { $limit: 5 },
+            {
+              $project: {
+                _id: 0,
+                name: "$_id",
+                requests: 1,
+              },
+            },
+          ])
+          .toArray();
 
-      res.send({
-        returnable: result.find((r) => r._id === true)?.count || 0,
-        nonReturnable: result.find((r) => r._id === false)?.count || 0,
-      });
+        res.send(data);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
     });
 
     // fetch packages
@@ -720,7 +733,6 @@ async function run() {
           return res.status(404).send({ message: "Package not found" });
         }
 
-        // TEMP: identify HR by email from frontend later (secure version later)
         const email = req.body.email;
 
         await usersCollection.updateOne(
