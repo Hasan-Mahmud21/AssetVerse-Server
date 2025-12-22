@@ -107,25 +107,42 @@ async function run() {
       }
     });
 
-    // USER REGISTER - EMPLOYEE
-
     app.post("/users/employee", async (req, res) => {
-      const user = req.body;
+      try {
+        const user = req.body;
 
-      const exists = await usersCollection.findOne({ email: user.email });
-      if (exists) {
-        return res.send({ message: "Email already exists" });
+        // 1. Check if user already exists
+        const exists = await usersCollection.findOne({ email: user.email });
+        if (exists) {
+          return res.send({
+            success: false,
+            message: "Email already exists in Database",
+          });
+        }
+
+        // 2. Prepare the object
+        const employeeUser = {
+          name: user.name,
+          email: user.email,
+          dateOfBirth: user.dateOfBirth,
+          role: "employee",
+          assignedAssets: [],
+          createdAt: new Date(),
+        };
+
+        // 3. Insert
+        const result = await usersCollection.insertOne(employeeUser);
+
+        // 4. Send SUCCESS response
+        if (result.insertedId) {
+          res.send({ success: true, message: "User saved to database" });
+        } else {
+          res.send({ success: false, message: "Failed to insert user" });
+        }
+      } catch (error) {
+        console.error("DB Error:", error);
+        res.status(500).send({ success: false, message: error.message });
       }
-
-      const employeeUser = {
-        ...user,
-        role: "employee",
-        assignedAssets: [],
-        createdAt: new Date(),
-      };
-
-      const result = await usersCollection.insertOne(employeeUser);
-      res.send(result);
     });
 
     // GET USER BY EMAIL
@@ -462,6 +479,7 @@ async function run() {
                 assetName: request.assetName,
                 assetType: request.assetType,
                 companyName: request.companyName,
+                image: asset.image,
                 assignedDate: new Date(),
                 status: "approved",
               },
